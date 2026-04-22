@@ -2,6 +2,8 @@
 
 A 3-D numerical solver for the Poisson equaiton on a cubic lattice, with support for 
 three iterative algorithms and two physical charge configurations.
+This script has all the functions and classes to either run an animation or measurements of the simulation. 
+The user needs to put in different arguements and customise the animation or measurement conditions.
 
 ## Dependencies
 
@@ -9,18 +11,15 @@ three iterative algorithms and two physical charge configurations.
 - NumPy
 - Matplotlib
 - SciPy
+- Numba
  
 Install dependencies with:
  
 ```bash
-pip install numpy matplotlib scipy
+pip install numpy matplotlib scipy numba
 ```
 
-## poisson.py
-This script has all the functions and classes to either run an animation or measurements of the simulation. 
-The user needs to put in different arguements and customise the animation or measurement conditions.
-
-### Arguments
+## Arguments
 
 - 'l', Lattice side length. The simulation grid is `l × l`, Default = 100
 - 'omega', SOR relaxation parameter (only used with --alg sor), Default = 1.87
@@ -49,7 +48,7 @@ python3 poisson.py --type s --alg sor --tol 1e-3 --l 50 --mp True
 ```
 
 ## Output
-All outputs are saved relative to the scipt's directory:
+All outputs are saved relative to the script's directory:
 
 ```
 outputs/
