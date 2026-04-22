@@ -11,51 +11,62 @@ from matplotlib import pyplot as plt
 import os
 import argparse
 import scipy
-import multiprocessing as mp
+from numba import njit
 
-def simulate_single_omega(l, tolerance, omega):
+@njit
+def gauss_seidel_sweep_numba(phi, rho, l):
     """
-    Run a single SOR simulation to convergence for a given relaxation parameter.
-
-    Parameters
-    ----------
-    l : int
-        Side length of the cubic lattice (l × l × l grid points).
-    tolerance : float
-        Convergence threshold; iteration stops when ``max|Δφ| < tolerance``.
-    omega : float
-        SOR relaxation parameter (1 ≤ ω < 2).
-
-    Returns
-    -------
-    omega : float
-        The relaxation parameter that was used.
-    t : int
-        Number of sweeps required to reach convergence (capped at 10 000).
-
+    Performs one Gauss-Seidel sweep in 3D.
+    Numba handles the triple nested loops at C-speed.
     """
-    
-    # Initialise the Poisson class
-    poisson = Poisson(l, tolerance, omega, init="Monopole")
-    
-    # Set time to zero
-    t = 0
-    
-    # Initialise the error to be large
-    error = 100.0
-    
-    # Continue to update phi until the error is smaller than the tolerance
-    while error > tolerance:
-        
-        distance = poisson.sor()
-        error = np.max(distance)
-        t += 1
-        
-        # To prevent infinite loops
-        if t > 10000:
-            break
-        
-    return omega, t
+    old_phi = phi.copy()
+    for i in range(1, l - 1):
+        for j in range(1, l - 1):
+            for k in range(1, l - 1):
+                phi[i, j, k] = (phi[i - 1, j, k] + phi[i + 1, j, k] +
+                                phi[i, j - 1, k] + phi[i, j + 1, k] +
+                                phi[i, j, k - 1] + phi[i, j, k + 1] +
+                                rho[i, j, k]) / 6.0
+    return np.abs(phi - old_phi)
+
+@njit
+def sor_sweep_numba(phi, rho, l, omega):
+    """
+    Performs one SOR sweep in 3D.
+    Directly modifies phi in-place for memory efficiency.
+    """
+    old_phi = phi.copy()
+    for i in range(1, l - 1):
+        for j in range(1, l - 1):
+            for k in range(1, l - 1):
+                # Standard GS update
+                gs = (phi[i - 1, j, k] + phi[i + 1, j, k] +
+                      phi[i, j - 1, k] + phi[i, j + 1, k] +
+                      phi[i, j, k - 1] + phi[i, j, k + 1] +
+                      rho[i, j, k]) / 6.0
+                
+                # Over-relaxation step
+                phi[i, j, k] = (1.0 - omega) * phi[i, j, k] + omega * gs
+                
+    return np.abs(phi - old_phi)
+
+@njit
+def sor_sweep_2d_numba(phi, rho, l, omega):
+    """
+    Performs one SOR sweep on a 2D lattice.
+    Much more efficient for infinite wire geometries.
+    """
+    old_phi = phi.copy()
+    for i in range(1, l - 1):
+        for j in range(1, l - 1):
+            # 2D update logic (4 neighbors instead of 6)
+            gs = (phi[i - 1, j] + phi[i + 1, j] +
+                  phi[i, j - 1] + phi[i, j + 1] +
+                  rho[i, j]) / 4.0
+            
+            phi[i, j] = (1.0 - omega) * phi[i, j] + omega * gs
+                
+    return np.abs(phi - old_phi)
 
 class Poisson(object):
     """
@@ -90,14 +101,16 @@ class Poisson(object):
         self.l = l
         self.omega = omega
         self.tolerance = tolerance
-        self.phi = self.init_phi()
+        self.init_type = init
         
         if init == "Monopole":
             
+            self.phi = self.init_phi_3d()
             self.rho = self.init_rho_monopole()
             
         if init == "Wire":
             
+            self.phi = self.init_phi_2d()
             self.rho = self.init_rho_wire()
 
     def boundary_conditions(self, phi):
@@ -116,20 +129,25 @@ class Poisson(object):
 
         """
 
-        # Set boundaries to be zero
-        phi[0, :, :] = 0  # x-axis top face
-        phi[-1, :, :] = 0  # x-axis bottom face
-        phi[:, 0, :] = 0  # y-axis top face
-        phi[:, -1, :] = 0  # y-axis bottom face
-        phi[:, :, 0] = 0  # z-axis top face
-        phi[:, :, -1] = 0  # z-axis bottom face
+        # 3D case
+        if phi.ndim == 3:
+            # Set boundaries to be zero
+            phi[0, :, :], phi[-1, :, :] = 0, 0
+            phi[:, 0, :], phi[:, -1, :] = 0, 0
+            phi[:, :, 0], phi[:, :, -1] = 0, 0
+            
+        # 2D case
+        else:
+            phi[0, :], phi[-1, :] = 0, 0
+            phi[:, 0], phi[:, -1] = 0, 0
 
         return phi
 
-    def init_phi(self):
+    def init_phi_3d(self):
         """
         Initialise the potential field with uniform random noise and set the 
         boundaries to be zero.
+        3D case
 
         Returns
         -------
@@ -140,6 +158,25 @@ class Poisson(object):
 
         # Initialise lattice to have some random noise between 0 and 1
         phi = np.random.rand(self.l, self.l, self.l)
+
+        # Assign to self.phi and set boundaries to be zero
+        return self.boundary_conditions(phi)
+    
+    def init_phi_2d(self):
+        """
+        Initialise the potential field with uniform random noise and set the 
+        boundaries to be zero.
+        2D case
+
+        Returns
+        -------
+        np.ndarray of shape (l, l)
+            Randomly initialised potential field with zero boundaries.
+
+        """
+
+        # Initialise lattice to have some random noise between 0 and 1
+        phi = np.random.rand(self.l, self.l)
 
         # Assign to self.phi and set boundaries to be zero
         return self.boundary_conditions(phi)
@@ -164,6 +201,7 @@ class Poisson(object):
     def init_rho_wire(self):
         """
         Initialise the charge density as an infinite wire along the z-axis.
+        In 2D due to symmetry 
 
         Returns
         -------
@@ -173,8 +211,9 @@ class Poisson(object):
         """
         
         # Initiate rho as a monopole
-        rho = np.zeros(shape=(self.l, self.l, self.l))
-        rho[self.l // 2, self.l // 2, :] = 1
+        # In 2D since due to symmetry 
+        rho = np.zeros(shape=(self.l, self.l))
+        rho[self.l // 2, self.l // 2] = 1
 
         return rho
 
@@ -190,10 +229,17 @@ class Poisson(object):
         """
 
         # Calculate new phi, taking into consideration periodic boundaries
-        new_phi = (np.roll(self.phi, 1, axis=0) + np.roll(self.phi, -1, axis=0) +
-                   np.roll(self.phi, 1, axis=1) + np.roll(self.phi, -1, axis=1) +
-                   np.roll(self.phi, 1, axis=2) + np.roll(self.phi, -1, axis=2) +
-                   self.rho) / 6
+        if self.phi.ndim == 3:
+            # 3D update (6 neighbors)
+            new_phi = (np.roll(self.phi, 1, axis=0) + np.roll(self.phi, -1, axis=0) +
+                       np.roll(self.phi, 1, axis=1) + np.roll(self.phi, -1, axis=1) +
+                       np.roll(self.phi, 1, axis=2) + np.roll(self.phi, -1, axis=2) +
+                       self.rho) / 6.0
+        else:
+            # 2D update (4 neighbors)
+            new_phi = (np.roll(self.phi, 1, axis=0) + np.roll(self.phi, -1, axis=0) +
+                       np.roll(self.phi, 1, axis=1) + np.roll(self.phi, -1, axis=1) +
+                       self.rho) / 4.0
 
         # Set boundaries to be zero
         new_phi = self.boundary_conditions(new_phi)
@@ -208,7 +254,7 @@ class Poisson(object):
 
     def gauss_seidel(self):
         """
-        Perform one Gauss-Seidel sweep over the entire lattice.
+        Perform one Gauss-Seidel sweep over the entire lattice using Numba logic.
 
         Returns
         -------
@@ -217,29 +263,16 @@ class Poisson(object):
 
         """
 
-        # First, save old phi
-        old_phi = self.phi.copy()
-
-        # Calculate new phi using the most recently updated cells
-        # Avoiding the boundaries so they stay at zero
-        for i in range(1, self.l - 1):
-            for j in range(1, self.l - 1):
-                for k in range(1, self.l - 1):
-
-                    self.phi[i, j, k] = (
-                        self.phi[i - 1, j, k] + self.phi[i + 1, j, k] +
-                        self.phi[i, j - 1, k] + self.phi[i, j + 1, k] +
-                        self.phi[i, j, k - 1] + self.phi[i, j, k + 1] +
-                        self.rho[i, j, k]) / 6
-
-        # Calculate distance between old and new phi
-        distance = np.abs(self.phi - old_phi)
-
+        # Ensure array is float64 for Numba
+        distance = gauss_seidel_sweep_numba(self.phi.astype(np.float64), 
+                                            self.rho.astype(np.float64), 
+                                            self.l)
+        
         return distance
 
     def sor(self):
         """
-        Perform one Successive Over-Relaxation (SOR) sweep.
+        Perform one SOR sweep in 2D or 3D using Numba logic.
 
         Returns
         -------
@@ -248,27 +281,18 @@ class Poisson(object):
 
         """
 
-        # First, save old phi
-        old_phi = self.phi.copy()
-
-        # Calculate new phi using over relaxation
-        # Avoiding the boundaries so they stay at zero
-        for i in range(1, self.l - 1):
-            for j in range(1, self.l - 1):
-                for k in range(1, self.l - 1):
-
-                    gs = (self.phi[i - 1, j, k] + self.phi[i + 1, j, k] +
-                            self.phi[i, j - 1, k] + self.phi[i, j + 1, k] +
-                            self.phi[i, j, k - 1] + self.phi[i, j, k + 1] +
-                            self.rho[i, j, k]) / 6
-                    
-                    self.phi[i, j, k] = (1 - self.omega) * self.phi[i, j, k] +\
-                        self.omega * gs
-
-        # Calculate distance between old and new phi
-        distance = np.abs(self.phi - old_phi)
-
+        # Convert to float64 to ensure Numba compatibility
+        phi_f64 = self.phi.astype(np.float64)
+        rho_f64 = self.rho.astype(np.float64)
+        
+        if self.phi.ndim == 3:
+            distance = sor_sweep_numba(phi_f64, rho_f64, self.l, self.omega)
+        else:
+            distance = sor_sweep_2d_numba(phi_f64, rho_f64, self.l, self.omega)
+            
+        self.phi = phi_f64 # Update class field
         return distance
+
 
     def get_electric_field(self):
         """
@@ -311,7 +335,7 @@ class Poisson(object):
         
         # B = curl(A), with A = (0, 0, phi)
         # B_z = 0 since A_z has no variation along z for an infinite wire
-        return grad_y, -grad_x, np.zeros(shape=(self.l, self.l, self.l))
+        return grad_y, -grad_x, np.zeros_like(self.phi)
 
 
 class Simulation(object):
@@ -500,12 +524,12 @@ class Simulation(object):
         M_x, M_y, M_z = poisson.get_magnetic_field()
         M = np.sqrt(M_x**2 + M_y**2 + M_z**2)
         
-        # Extract the midplanes
-        phi_midplane = poisson.phi[:, :, self.l // 2]
-        M_x_midplane = M_x[:, :, self.l // 2]
-        M_y_midplane = M_y[:, :, self.l // 2]
-        M_z_midplane = M_z[:, :, self.l // 2]
-        M_midplane = M[:, :, self.l // 2]
+        # Extract the midplanes but we don't need to slice since it is 2D
+        phi_2d = poisson.phi
+        M_x_2d = M_x
+        M_y_2d = M_y
+        M_z_2d = M_z
+        M_2d   = M
         
         # Open in "a" (append) or "w" (overwrite) mode
         # Write the values into the file
@@ -521,13 +545,13 @@ class Simulation(object):
                     r = np.sqrt((x - self.l // 2)**2 + (y - self.l // 2)**2)
                     
                     # Obtain the magnetic field values
-                    M_x_val = M_x_midplane[x,y]
-                    M_y_val = M_y_midplane[x,y]
-                    M_z_val = M_z_midplane[x,y]
+                    M_x_val = M_x_2d[x,y]
+                    M_y_val = M_y_2d[x,y]
+                    M_z_val = M_z_2d[x,y]
                     
                     # Obtain the potential and total magnetic field magnitude
-                    phi_val = phi_midplane[x, y]
-                    M_val = M_midplane[x, y]
+                    phi_val = phi_2d[x, y]
+                    M_val = M_2d[x, y]
                         
                     # Write to the files
                     f.write(f"{x},{y},{r},{M_x_val},{M_y_val},{M_z_val},{M_val},{phi_val}\n")
@@ -1065,35 +1089,28 @@ class Simulation(object):
         
         # Make a range of omegas to test
         omegas = np.round(np.arange(1, 2, step = 0.01), 2)
-        #omegas = np.round(np.arange(1.8, 1.9, step = 0.01),2)
         sweeps = []
+        max_omega = np.max(omegas)
         
         # Iterate through all omegas
         for omega in omegas:
-            print(f"Simulating omega = {omega}")
+            print(f"\rSimulating omega = {omega}/{max_omega}", end='', flush=True)
             
             # Initialise Poisson class
             poisson = Poisson(self.l, self.tolerance, omega, init = "Monopole")
-            
-            # Using the SORS algorithm
-            update = poisson.sor
             
             # Initialise time and error
             t = 0
             error = 100
             
             # Continue to update phi until the error is smaller than the tolerance
-            while error > self.tolerance:
-                print(f"Simulating step = {t}", end = '\r')
+            # Break if simulation goes on too long
+            while error > self.tolerance and t < 10000:
     
-                # Update the animation and obtain the error
-                distance = update()
+                # Update the animation and obtain the error using Numbda
+                distance = poisson.sor()
                 error = np.max(distance)
                 t += 1
-            
-                # Break if simulation goes on too long
-                if t > 10000:
-                    break
                 
             sweeps.append(t)
             
@@ -1101,65 +1118,11 @@ class Simulation(object):
         # Write the values into the file
         with open(file_path, "w") as f:
             
-                f.write("omega,t\n")
-        
-                for i in range(len(omegas)):
-                                
-                    f.write(f"{omegas[i]},{sweeps[i]}\n")
-        
-    def sors_measurements_multiprocessing(self, filename):
-        """
-        Measure the total number of sweeps until convergence for different
-        relaxation parameters ω using multiprocessing.
-
-        Parameters
-        ----------
-        filename : str
-            Output data filename (written under ``outputs/datafiles/``).
-
-        Returns
-        -------
-        None.
-
-        """
-
-        base_directory = os.path.dirname(os.path.abspath(__file__))
-        outputs_directory = os.path.join(base_directory, "outputs")
-        datafiles_folder = os.path.join(outputs_directory, "datafiles")
-        file_path = os.path.join(datafiles_folder, filename)
-    
-        if not os.path.exists(datafiles_folder):
-            os.makedirs(datafiles_folder)
-    
-        omegas = np.round(np.arange(1.0, 2.0, step=0.01), 2)
-        #omegas = np.round(np.arange(1.8, 2.0, step=0.01), 2)
-        results = {}
-    
-        def callback(result):
-            omega, t = result
-            results[omega] = t
-            print(f"omega={omega:.2f} | sweeps={t}")
-    
-        print(f"Starting multiprocessing SOR on {mp.cpu_count()} cores...")
-    
-        with mp.Pool(processes=mp.cpu_count()) as pool:
-            async_results = [
-                pool.apply_async(
-                    simulate_single_omega,
-                    args=(self.l, self.tolerance, omega),
-                    callback=callback
-                )
-                for omega in omegas
-            ]
-            # Wait for all jobs to finish
-            for ar in async_results:
-                ar.get()
-    
-        # Write results in omega order
-        with open(file_path, "w") as f:
             f.write("omega,t\n")
-            for omega in omegas:
-                f.write(f"{omega},{results[omega]}\n")
+    
+            for i in range(len(omegas)):
+                            
+                f.write(f"{omegas[i]},{sweeps[i]}\n")
         
 
 
@@ -1181,8 +1144,6 @@ if __name__ == "__main__":
                         help="Electricm magnetic, or sors experiment")
     parser.add_argument("--alg", type=str, default="j", choices=["j", "gs", "sor"],
                         help="Algorithms: Jacobi (j), Gauss-Seidel (gs), Over-relaxation (sor)")
-    parser.add_argument("--mp", type =str, default="False",choices=["True","False"],
-                         help="Multiprocessing for SORS")
 
     args = parser.parse_args()
 
@@ -1191,8 +1152,8 @@ if __name__ == "__main__":
 
     if args.type == "e":
 
-        filename = f"electric_{args.alg}alg_{args.l}l_{args.tol}tol_1.txt"
-        #sim.electric_measurements(args.alg, filename)
+        filename = f"electric_{args.alg}alg_{args.l}l_{args.tol}tol_2.txt"
+        sim.electric_measurements(args.alg, filename)
         sim.plot_potential_measurements(filename, field_type = "Electric")
         sim.plot_field_measurements(filename, field_type = "Electric")
         sim.plot_field_vs_distance_measurements(filename, field_type = "Electric")
@@ -1200,22 +1161,16 @@ if __name__ == "__main__":
         
     if args.type == "m":
         
-        filename = f"magnetic_{args.alg}alg_{args.l}l_{args.tol}tol_1.txt"
-        #sim.magnetic_measurements(args.alg, filename)
+        filename = f"magnetic_{args.alg}alg_{args.l}l_{args.tol}tol_2.txt"
+        sim.magnetic_measurements(args.alg, filename)
         sim.plot_potential_measurements(filename, field_type = "Magnetic")
         sim.plot_field_measurements(filename, field_type = "Magnetic")
         sim.plot_field_vs_distance_measurements(filename, field_type = "Magnetic")
         sim.plot_potential_vs_distance_measurements(filename, field_type = "Magnetic")
         
-    if args.type == "s" and args.mp == "False":
+    if args.type == "s":
         
-        filename = f"sors_experiment_{args.l}l_{args.tol}tol_1.txt"
-        #sim.sors_measurements(filename)
-        sim.plot_sors(filename)
-        
-    if args.type == "s" and args.mp == "True":
-        
-        filename = f"sors_experiment_{args.l}l_{args.tol}tol_1.txt"
-        #sim.sors_measurements_multiprocessing(filename)
+        filename = f"sors_experiment_{args.l}l_{args.tol}tol_2.txt"
+        sim.sors_measurements(filename)
         sim.plot_sors(filename)
       
