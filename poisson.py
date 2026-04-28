@@ -328,7 +328,7 @@ class Poisson(object):
 
         return phi
 
-    def init_phi(self, phi):
+    def init_phi(self, dim):
         """
         Initialise the potential field with uniform random noise and set the 
         boundaries to be zero for 2D and 3D cases.
@@ -341,7 +341,7 @@ class Poisson(object):
         """
         
         # 3D case
-        if phi == "3D":
+        if dim == "3D":
             
             # Initialise lattice to have some random noise between 0 and 1
             phi = np.random.rand(self.l, self.l, self.l).astype(np.float64)
