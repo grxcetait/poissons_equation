@@ -1,4 +1,4 @@
-# Cahn-Hilliard Phase-Field Simulation
+# Poisson's Equation Simulation
 
 A 3-D numerical solver for the Poisson equaiton on a cubic lattice, with support for 
 three iterative algorithms and two physical charge configurations.
@@ -24,9 +24,9 @@ pip install numpy matplotlib scipy numba
 - 'l', Lattice side length. The simulation grid is `l × l`, Default = 100
 - 'omega', SOR relaxation parameter (only used with --alg sor), Default = 1.87
 - 'tol', Convergence tolerance/accuracy, Default = 1e-6
+- 'dx', Spatial step, Default = 1
 - 'type', Experiment type: electric ('e'), magnetic ('m'), or SOR sweeps ('s')
 - 'alg', Algorithm type: Jacobi ('j'), Gauss-Seidel ('gs'), or SOR ('sor')
-- 'mp', Set True to use multiprocessing for SOR experiment, Default = False
 
 ## Command line examples
 
@@ -41,10 +41,10 @@ python3 poisson.py --type e --alg j --tol 1e-6 --l 100
 python3 poisson.py --type m --alg j --tol 1e-6 --l 100
 ```
 
-**SOR** — using all CPU cores with a 1e-3 accuracy in a 50x50 lattice.
+**SOR** — from a point charge in a 50x50 lattice with 1e-3 accuracy.
 
 ```
-python3 poisson.py --type s --alg sor --tol 1e-3 --l 50 --mp True
+python3 poisson.py --type s --alg sor --tol 1e-3 --l 50
 ```
 
 ## Output
