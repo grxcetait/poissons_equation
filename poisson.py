@@ -14,67 +14,248 @@ import scipy
 from numba import njit
 
 @njit
-def gauss_seidel_sweep_numba(phi, rho, l):
+def gauss_seidel_sweep_numba(phi, rho, l, dx):
     """
-    Performs one Gauss-Seidel sweep in 3D.
-    Numba handles the triple nested loops at C-speed.
+    Performs one Gauss-Seidel sweep over the entire lattice in 3D.
+    
+    Parameters
+    ----------
+    phi : np.ndarray of shape (l, l, l)
+        Potential field.
+    rho : np.ndarray of shape (l, l, l)
+        Charge density. 
+    l : int
+        Side length of the cubic lattice.
+        
+    Returns
+    -------
+    np.ndarray of shape (l, l, l)
+        Absolute change |φ_new − φ_old| at every grid point.
     """
+    
+    # First, save old phi
     old_phi = phi.copy()
+    
+    # Calculate new phi using the most recently updated cells
+    # Avoiding the boundaries so they stay at zero
     for i in range(1, l - 1):
         for j in range(1, l - 1):
             for k in range(1, l - 1):
+                
+                
                 phi[i, j, k] = (phi[i - 1, j, k] + phi[i + 1, j, k] +
                                 phi[i, j - 1, k] + phi[i, j + 1, k] +
                                 phi[i, j, k - 1] + phi[i, j, k + 1] +
-                                rho[i, j, k]) / 6.0
+                                dx**2 * rho[i, j, k]) / 6.0
+                
+    # Calculate and return distance between old and new phi
     return np.abs(phi - old_phi)
 
 @njit
-def sor_sweep_numba(phi, rho, l, omega):
+def gauss_seidel_sweep_2d_numba(phi, rho, l, dx):
     """
-    Performs one SOR sweep in 3D.
-    Directly modifies phi in-place for memory efficiency.
+    Performs one Gauss-Seidel sweep over the entire lattice in 2D.
+    
+    Parameters
+    ----------
+    phi : np.ndarray of shape (l, l)
+        Potential field.
+    rho : np.ndarray of shape (l, l)
+        Charge density. 
+    l : int
+        Side length of the lattice.
+        
+    Returns
+    -------
+    np.ndarray of shape (l, l)
+        Absolute change |φ_new − φ_old| at every grid point.
     """
+    
+    # First, save old phi
     old_phi = phi.copy()
+    
+    # Calculate new phi using the most recently updated cells
+    # Avoiding the boundaries so they stay at zero
+    for i in range(1, l - 1):
+        for j in range(1, l - 1):
+            
+            phi[i, j] = (phi[i - 1, j] + phi[i + 1, j] +
+                         phi[i, j - 1] + phi[i, j + 1] +
+                         dx**2 * rho[i, j]) / 4.0
+                
+    # Calculate and return distance between old and new phi
+    return np.abs(phi - old_phi)
+
+@njit
+def jacobi_sweep_numba(phi, rho, l, dx):
+    """
+    Performs one Jacobi sweep over the entire lattice in 3D.
+    
+    Parameters
+    ----------
+    phi : np.ndarray of shape (l, l, l)
+        Potential field.
+    rho : np.ndarray of shape (l, l, l)
+        Charge density. 
+    l : int
+        Side length of the cubic lattice.
+        
+    Returns
+    -------
+    np.ndarray of shape (l, l, l)
+        Absolute change |φ_new − φ_old| at every grid point.
+    """
+    
+    # First, save old phi
+    new_phi = phi.copy()
+    
+    # Calculate new phi, taking into consideration periodic boundaries
     for i in range(1, l - 1):
         for j in range(1, l - 1):
             for k in range(1, l - 1):
+                
+                # Update lattice using neighbors from the old phi
+                new_phi[i, j, k] = (phi[i - 1, j, k] + phi[i + 1, j, k] +
+                                    phi[i, j - 1, k] + phi[i, j + 1, k] +
+                                    phi[i, j, k - 1] + phi[i, j, k + 1] +
+                                    dx**2 * rho[i, j, k]) / 6.0
+                
+    # Calculate distance between old and new phi
+    distance = np.abs(new_phi - phi)
+    
+    return new_phi, distance
+
+@njit
+def jacobi_sweep_2d_numba(phi, rho, l, dx):
+    """
+    Performs one Jacobi sweep over the entire lattice in 2D.
+    
+    Parameters
+    ----------
+    phi : np.ndarray of shape (l, l)
+        Potential field.
+    rho : np.ndarray of shape (l, l)
+        Charge density. 
+    l : int
+        Side length of the lattice.
+        
+    Returns
+    -------
+    new_phi : np.ndarray of shape (l, l)
+        The updated potential field.
+    distance : np.ndarray of shape (l, l)
+        Absolute change |φ_new − φ_old| at every grid point.
+    """
+    
+    # First, create a copy for the new potential
+    new_phi = phi.copy()
+    
+    # Calculate new phi using only values from the previous iteration
+    for i in range(1, l - 1):
+        for j in range(1, l - 1):
+            
+            # Update using neighbors from the old phi
+            new_phi[i, j] = (phi[i - 1, j] + phi[i + 1, j] +
+                             phi[i, j - 1] + phi[i, j + 1] +
+                             dx**2 * rho[i, j]) / 4.0
+                
+    # Calculate distance between old and new phi
+    distance = np.abs(new_phi - phi)
+    
+    return new_phi, distance
+
+@njit
+def sor_sweep_numba(phi, rho, l, omega, dx):
+    """
+    Performs one Successive Over-Relaxation (SOR) sweep in 3D.
+    
+    Parameters
+    ----------
+    phi : np.ndarray of shape (l, l, l)
+        Potential field.
+    rho : np.ndarray of shape (l, l, l)
+        Charge density. 
+    l : int
+        Side length of the cubic lattice.
+    omega : float
+        Relaxation parameter
+        
+    Returns
+    -------
+    np.ndarray of shape (l, l, l)
+        Absolute change |φ_new − φ_old| at every grid point.
+    """
+    
+    # First, save old phi
+    old_phi = phi.copy()
+    
+    # Calculate new phi using over relaxation
+    # Avoiding the boundaries so they stay at zero
+    for i in range(1, l - 1):
+        for j in range(1, l - 1):
+            for k in range(1, l - 1):
+                
                 # Standard GS update
                 gs = (phi[i - 1, j, k] + phi[i + 1, j, k] +
                       phi[i, j - 1, k] + phi[i, j + 1, k] +
                       phi[i, j, k - 1] + phi[i, j, k + 1] +
-                      rho[i, j, k]) / 6.0
+                      dx**2 * rho[i, j, k]) / 6.0
                 
                 # Over-relaxation step
                 phi[i, j, k] = (1.0 - omega) * phi[i, j, k] + omega * gs
-                
+            
+    # Calculate and return distance between old and new phi
     return np.abs(phi - old_phi)
 
 @njit
-def sor_sweep_2d_numba(phi, rho, l, omega):
+def sor_sweep_2d_numba(phi, rho, l, omega, dx):
     """
-    Performs one SOR sweep on a 2D lattice.
+    Performs one Successive Over-Relaxation (SOR) sweep on a 2D lattice.
     Much more efficient for infinite wire geometries.
+    
+    Parameters
+    ----------
+    phi : np.ndarray of shape (l, l, l)
+        Potential field.
+    rho : np.ndarray of shape (l, l, l)
+        Charge density. 
+    l : int
+        Side length of the cubic lattice.
+    omega : float
+        Relaxation parameter
+        
+    Returns
+    -------
+    np.ndarray of shape (l, l, l)
+        Absolute change |φ_new − φ_old| at every grid point.
     """
+    
+    # First, save old phi
     old_phi = phi.copy()
+    
+    # Calculate new phi using over relaxation
+    # Avoiding the boundaries so they stay at zero
     for i in range(1, l - 1):
         for j in range(1, l - 1):
+            
             # 2D update logic (4 neighbors instead of 6)
             gs = (phi[i - 1, j] + phi[i + 1, j] +
                   phi[i, j - 1] + phi[i, j + 1] +
-                  rho[i, j]) / 4.0
+                  dx**2 * rho[i, j]) / 4.0
             
+            # Over-relaxation step
             phi[i, j] = (1.0 - omega) * phi[i, j] + omega * gs
                 
+    # Calculate and return distance between old and new phi
     return np.abs(phi - old_phi)
 
 class Poisson(object):
     """
-    A class that implements the non-dimensionised 3D Poisson equation on a cubic 
+    A class that implements the 3D Poisson equation on a cubic 
     lattice.
     """
 
-    def __init__(self, l, tolerance, omega, init):
+    def __init__(self, l, tolerance, omega, dx, init):
         """
         Initialise the Poisson solver.
 
@@ -102,15 +283,16 @@ class Poisson(object):
         self.omega = omega
         self.tolerance = tolerance
         self.init_type = init
+        self.dx = dx
         
         if init == "Monopole":
             
-            self.phi = self.init_phi_3d()
+            self.phi = self.init_phi("3D")
             self.rho = self.init_rho_monopole()
             
         if init == "Wire":
             
-            self.phi = self.init_phi_2d()
+            self.phi = self.init_phi("2D")
             self.rho = self.init_rho_wire()
 
     def boundary_conditions(self, phi):
@@ -131,6 +313,7 @@ class Poisson(object):
 
         # 3D case
         if phi.ndim == 3:
+            
             # Set boundaries to be zero
             phi[0, :, :], phi[-1, :, :] = 0, 0
             phi[:, 0, :], phi[:, -1, :] = 0, 0
@@ -138,16 +321,17 @@ class Poisson(object):
             
         # 2D case
         else:
+            
+            # Set boundaries to be zero
             phi[0, :], phi[-1, :] = 0, 0
             phi[:, 0], phi[:, -1] = 0, 0
 
         return phi
 
-    def init_phi_3d(self):
+    def init_phi(self, phi):
         """
         Initialise the potential field with uniform random noise and set the 
-        boundaries to be zero.
-        3D case
+        boundaries to be zero for 2D and 3D cases.
 
         Returns
         -------
@@ -155,28 +339,18 @@ class Poisson(object):
             Randomly initialised potential field with zero boundaries.
 
         """
-
-        # Initialise lattice to have some random noise between 0 and 1
-        phi = np.random.rand(self.l, self.l, self.l)
-
-        # Assign to self.phi and set boundaries to be zero
-        return self.boundary_conditions(phi)
-    
-    def init_phi_2d(self):
-        """
-        Initialise the potential field with uniform random noise and set the 
-        boundaries to be zero.
-        2D case
-
-        Returns
-        -------
-        np.ndarray of shape (l, l)
-            Randomly initialised potential field with zero boundaries.
-
-        """
-
-        # Initialise lattice to have some random noise between 0 and 1
-        phi = np.random.rand(self.l, self.l)
+        
+        # 3D case
+        if phi == "3D":
+            
+            # Initialise lattice to have some random noise between 0 and 1
+            phi = np.random.rand(self.l, self.l, self.l).astype(np.float64)
+            
+        # 2D case
+        else:
+            
+            # Initialise lattice to have some random noise between 0 and 1
+            phi = np.random.rand(self.l, self.l).astype(np.float64)
 
         # Assign to self.phi and set boundaries to be zero
         return self.boundary_conditions(phi)
@@ -193,7 +367,7 @@ class Poisson(object):
         """
 
         # Initiate rho as a monopole
-        rho = np.zeros(shape=(self.l, self.l, self.l))
+        rho = np.zeros(shape=(self.l, self.l, self.l)).astype(np.float64)
         rho[self.l // 2, self.l // 2, self.l // 2] = 1
 
         return rho
@@ -212,14 +386,15 @@ class Poisson(object):
         
         # Initiate rho as a monopole
         # In 2D since due to symmetry 
-        rho = np.zeros(shape=(self.l, self.l))
+        rho = np.zeros(shape=(self.l, self.l)).astype(np.float64)
         rho[self.l // 2, self.l // 2] = 1
 
         return rho
 
     def jacobi(self):
         """
-        Performs one Jacobi iteration over the entire lattice.
+        Performs one Jacobi iteration over the entire lattice using Numba.
+        For 2D and 3D cases.
 
         Returns
         -------
@@ -228,33 +403,28 @@ class Poisson(object):
 
         """
 
-        # Calculate new phi, taking into consideration periodic boundaries
+        # 3D update 
         if self.phi.ndim == 3:
-            # 3D update (6 neighbors)
-            new_phi = (np.roll(self.phi, 1, axis=0) + np.roll(self.phi, -1, axis=0) +
-                       np.roll(self.phi, 1, axis=1) + np.roll(self.phi, -1, axis=1) +
-                       np.roll(self.phi, 1, axis=2) + np.roll(self.phi, -1, axis=2) +
-                       self.rho) / 6.0
+            
+            new_phi, distance = jacobi_sweep_numba(self.phi, self.rho, self.l, self.dx)
+            
+        # 2D update 
         else:
-            # 2D update (4 neighbors)
-            new_phi = (np.roll(self.phi, 1, axis=0) + np.roll(self.phi, -1, axis=0) +
-                       np.roll(self.phi, 1, axis=1) + np.roll(self.phi, -1, axis=1) +
-                       self.rho) / 4.0
+            
+            new_phi, distance = jacobi_sweep_2d_numba(self.phi, self.rho, self.l, self.dx)
 
         # Set boundaries to be zero
         new_phi = self.boundary_conditions(new_phi)
-
-        # Calculate distance between old and new phi
-        distance = np.abs(self.phi - new_phi)
-
-        # Update phi 
+        
+        # Update phi
         self.phi = new_phi
 
         return distance
 
     def gauss_seidel(self):
         """
-        Perform one Gauss-Seidel sweep over the entire lattice using Numba logic.
+        Perform one Gauss-Seidel sweep over the entire lattice using Numba.
+        For 2D and 3D cases.
 
         Returns
         -------
@@ -263,16 +433,22 @@ class Poisson(object):
 
         """
 
-        # Ensure array is float64 for Numba
-        distance = gauss_seidel_sweep_numba(self.phi.astype(np.float64), 
-                                            self.rho.astype(np.float64), 
-                                            self.l)
+        # 3D update 
+        if self.phi.ndim == 3:
+            
+            distance = gauss_seidel_sweep_numba(self.phi, self.rho, self.l, self.dx)
+        
+        # 2D update 
+        else:
+            
+            distance = gauss_seidel_sweep_2d_numba(self.phi, self.rho, self.l, self.dx)
         
         return distance
 
     def sor(self):
         """
-        Perform one SOR sweep in 2D or 3D using Numba logic.
+        Perform one SOR sweep over the entire lattice using Numba.
+        For 2D and 3D cases.
 
         Returns
         -------
@@ -281,16 +457,16 @@ class Poisson(object):
 
         """
 
-        # Convert to float64 to ensure Numba compatibility
-        phi_f64 = self.phi.astype(np.float64)
-        rho_f64 = self.rho.astype(np.float64)
-        
+        # 3D update 
         if self.phi.ndim == 3:
-            distance = sor_sweep_numba(phi_f64, rho_f64, self.l, self.omega)
-        else:
-            distance = sor_sweep_2d_numba(phi_f64, rho_f64, self.l, self.omega)
             
-        self.phi = phi_f64 # Update class field
+            distance = sor_sweep_numba(self.phi, self.rho, self.l, self.omega, self.dx)
+          
+        # 2D update 
+        else:
+            
+            distance = sor_sweep_2d_numba(self.phi, self.rho, self.l, self.omega, self.dx)
+
         return distance
 
 
@@ -309,9 +485,9 @@ class Poisson(object):
 
         """
         
-        E_x = -(np.roll(self.phi, -1, axis=0) - np.roll(self.phi, 1, axis=0)) / 2
-        E_y = -(np.roll(self.phi, -1, axis=1) - np.roll(self.phi, 1, axis=1)) / 2
-        E_z = -(np.roll(self.phi, -1, axis=2) - np.roll(self.phi, 1, axis=2)) / 2
+        E_x = -(np.roll(self.phi, -1, axis=0) - np.roll(self.phi, 1, axis=0)) / (2 * self.dx)
+        E_y = -(np.roll(self.phi, -1, axis=1) - np.roll(self.phi, 1, axis=1)) / (2 * self.dx)
+        E_z = -(np.roll(self.phi, -1, axis=2) - np.roll(self.phi, 1, axis=2)) / (2 * self.dx)
         
         return E_x, E_y, E_z
     
@@ -330,12 +506,30 @@ class Poisson(object):
 
         """
         
-        grad_x = (np.roll(self.phi, -1, axis=0) - np.roll(self.phi, 1, axis=0)) / 2
-        grad_y = (np.roll(self.phi, -1, axis=1) - np.roll(self.phi, 1, axis=1)) / 2
-        
         # B = curl(A), with A = (0, 0, phi)
         # B_z = 0 since A_z has no variation along z for an infinite wire
-        return grad_y, -grad_x, np.zeros_like(self.phi)
+        
+        # 3D update 
+        if self.phi.ndim == 3:
+            
+            grad_y = (np.roll(self.phi, -1, axis=1) - np.roll(self.phi, 1, axis=1)) / (2 * self.dx)
+            grad_x = (np.roll(self.phi, -1, axis=0) - np.roll(self.phi, 1, axis=0)) / (2 * self.dx)
+            
+            B_x = grad_y
+            B_y = -grad_x
+            B_z = np.zeros_like(self.phi)
+          
+        # 2D update 
+        else:
+        
+            grad_y = (np.roll(self.phi, -1, axis=1) - np.roll(self.phi, 1, axis=1)) / (2 * self.dx)
+            grad_x = (np.roll(self.phi, -1, axis=0) - np.roll(self.phi, 1, axis=0)) / (2 * self.dx)
+            
+            B_x = grad_y
+            B_y = -grad_x
+            B_z = np.zeros_like(self.phi)
+
+        return B_x, B_y, B_z
 
 
 class Simulation(object):
@@ -344,7 +538,7 @@ class Simulation(object):
     of the Poisson simulation.
     """
     
-    def __init__(self, l, tolerance, omega):
+    def __init__(self, l, tolerance, omega, dx):
         """
         Initialise the simulation parameters.
 
@@ -367,6 +561,7 @@ class Simulation(object):
         self.l = l
         self.omega = omega
         self.tolerance = tolerance
+        self.dx = dx
 
     def electric_measurements(self, alg, filename):
         """
@@ -396,7 +591,7 @@ class Simulation(object):
             os.makedirs(datafiles_folder)
             
         # Initialise Poisson class
-        poisson = Poisson(self.l, self.tolerance, self.omega, init = "Monopole")
+        poisson = Poisson(self.l, self.tolerance, self.omega, self.dx, init = "Monopole")
 
         # Define algorithm
         if alg == "j":
@@ -490,7 +685,7 @@ class Simulation(object):
             os.makedirs(datafiles_folder)
             
         # Initialise Poisson class
-        poisson = Poisson(self.l, self.tolerance, self.omega, init = "Wire")
+        poisson = Poisson(self.l, self.tolerance, self.omega, self.dx, init = "Wire")
 
         # Define algorithm
         if alg == "j":
@@ -826,9 +1021,6 @@ class Simulation(object):
         except FileNotFoundError:
             print(f"Error: Could not find {filename_path}")
             return 
-            
-        # Create an empty lattice
-        phi = np.zeros(shape = (self.l, self.l, self.l))
         
         # Convert input data into a np array
         input_data = np.array(input_data[1:], dtype = float)
@@ -836,13 +1028,19 @@ class Simulation(object):
         # Collect the input data
         x = input_data[:, 0].astype(int)
         y = input_data[:, 1].astype(int)
-        phi[x, y, self.l // 2] = input_data[:, 7]
+        phi_vals = input_data[:, 7]
+        
+        # Initalise 2D lattice
+        phi = np.zeros((self.l, self.l))
+        
+        # Put the values onto the lattice
+        phi[x, y] = phi_vals
         
         # Create empty plots
         fig, ax = plt.subplots(1, 1, figsize=(8, 10))
         
         # Plot the data
-        plot = plt.contour(phi[:, :, self.l // 2].T, levels = 10)
+        plot = plt.contour(phi.T, levels = 10)
         plt.colorbar(plot, shrink = 0.65)
         ax.set_title(
     rf"{field_type} Potential of the z-axis midplane"
@@ -862,7 +1060,7 @@ class Simulation(object):
         fig, ax = plt.subplots(1, 1, figsize=(8, 10))
         
         # Plot the contour
-        plot = plt.imshow(phi[:, :, self.l // 2].T, origin = "lower")
+        plot = plt.imshow(phi.T, origin = "lower")
         plt.colorbar(plot, shrink = 0.65)
         ax.set_title(
     rf"{field_type} Potential of the z-axis midplane"
@@ -1097,7 +1295,7 @@ class Simulation(object):
             print(f"\rSimulating omega = {omega}/{max_omega}", end='', flush=True)
             
             # Initialise Poisson class
-            poisson = Poisson(self.l, self.tolerance, omega, init = "Monopole")
+            poisson = Poisson(self.l, self.tolerance, omega, self.dx, init = "Monopole")
             
             # Initialise time and error
             t = 0
@@ -1132,13 +1330,12 @@ if __name__ == "__main__":
     # User input parameters
     parser.add_argument("--l", type=int, default=100,
                         help="Lattice size (l x l)")
-    # parser.add_argument("--dx", type = float, default = 1, help = "Spatial step")
-    # parser.add_argument("--dt", type = float, default = 0.01, help = "Time step")
     parser.add_argument("--mode", type=str, default="ani", choices=["ani", "mea"],
                         help="Animation or measurements")
     parser.add_argument("--steps", type=int, default=100000,
                         help="Number of simulation steps")
     parser.add_argument("--omega", type=float, default=1.87, help="Omega")
+    parser.add_argument("--dx", type = float, default = 1, help = "Spatial step")
     parser.add_argument("--tol", type=float, default=1e-6, help="Tolerance")
     parser.add_argument("--type", type=str, default="e", choices=["e", "m", "s"],
                         help="Electricm magnetic, or sors experiment")
@@ -1148,11 +1345,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Pass in parameters to the classes
-    sim = Simulation(l=args.l, tolerance=args.tol, omega=args.omega)
+    sim = Simulation(l=args.l, tolerance=args.tol, omega=args.omega, dx=args.dx)
 
     if args.type == "e":
 
-        filename = f"electric_{args.alg}alg_{args.l}l_{args.tol}tol_2.txt"
+        filename = f"electric_{args.alg}alg_{args.l}l_{args.tol}tol.txt"
         sim.electric_measurements(args.alg, filename)
         sim.plot_potential_measurements(filename, field_type = "Electric")
         sim.plot_field_measurements(filename, field_type = "Electric")
@@ -1161,7 +1358,7 @@ if __name__ == "__main__":
         
     if args.type == "m":
         
-        filename = f"magnetic_{args.alg}alg_{args.l}l_{args.tol}tol_2.txt"
+        filename = f"magnetic_{args.alg}alg_{args.l}l_{args.tol}tol.txt"
         sim.magnetic_measurements(args.alg, filename)
         sim.plot_potential_measurements(filename, field_type = "Magnetic")
         sim.plot_field_measurements(filename, field_type = "Magnetic")
@@ -1170,7 +1367,7 @@ if __name__ == "__main__":
         
     if args.type == "s":
         
-        filename = f"sors_experiment_{args.l}l_{args.tol}tol_2.txt"
+        filename = f"sors_experiment_{args.l}l_{args.tol}tol.txt"
         sim.sors_measurements(filename)
         sim.plot_sors(filename)
       
